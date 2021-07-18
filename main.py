@@ -1,6 +1,19 @@
 import requests
 import os
 import json
+import time
+
+
+def delete_temporary(directory):
+    """Удаление временных файлов и папок"""
+
+    print('Удаление временных файлов и папки.')
+    for file_path in os.listdir(directory):
+        os.remove(directory + file_path)
+    os.rmdir(directory)
+    print('Все временные файлы и папки удалены')
+
+    return 'Удаление временных файлов и папок выполнено'
 
 
 class VkUser:
@@ -14,144 +27,129 @@ class VkUser:
         }
         self.owner_id = owner_id
 
-    def get_photos(self, q, directory, kol):
+    def get_photos(self, q, directory):
         print('Сохранение фотографий с vk.com во временную локальную папку.')
         photos_get_url = self.url + '/photos.get'
         photos_get_params = {
-            'owner_id': '552934290',
+            'owner_id': self.owner_id,
             'album_id': 'profile',
             'extended': '1'
         }
         req = requests.get(photos_get_url, params={**self.params, **photos_get_params}).json()
 
-        photos_dict = {}
-        result = []
-
+        photos_dict = []
         for photo in req['response']['items']:
+            p = {}
             if photo['likes']['count'] not in photos_dict:
-                photos_dict[photo['likes']['count']] = photo
-                p = {}
                 p['file_name'] = str(photo['likes']['count']) + ".jpg"
-                max_photo = photo['sizes'][0]
-                for item in photo['sizes']:
-                    if item['height'] > max_photo['height']:
-                        max_photo = item
-                p['size'] = max_photo['height']
-                img_data = requests.get(max_photo['url']).content
-                with open(directory + p['file_name'], 'wb') as handler:
-                    handler.write(img_data)
-                result.append(p)
             else:
-                key = str(photo['likes']['count']) + '_' + str(photo['date'])
-                photos_dict[key] = photo
-                p = {}
                 p['file_name'] = str(photo['likes']['count']) + '_' + str(photo['date']) + ".jpg"
-                max_photo = photo['sizes'][0]
-                for item in photo['sizes']:
-                    if item['height'] > max_photo['height']:
-                        max_photo = item
-                p['size'] = max_photo['height']
-                img_data = requests.get(max_photo['url']).content
-                with open(directory + p['file_name'], 'wb') as handler:
-                    handler.write(img_data)
-                result.append(p)
+            photos_dict.append(photo['likes']['count'])
 
-        def myFunc(e):
-            return e['size']
-        result.sort(reverse=True, key=myFunc)
-        result = result[:kol]
-        with open(directory + 'file_list.json', 'w') as f:
-            json.dump(result, f)
+            max_photo = photo['sizes'][-1]
+            p['size'] = max_photo['height']
+            img_data = requests.get(max_photo['url']).content
+            with open(directory + p['file_name'], 'wb') as handler:
+                handler.write(img_data)
+
         print('Фотографии сохранены на локальном диске.')
 
-        return result
-
-    def delete_temporary(self, directory):
-        """Удаление временных файлов и папок"""
-
-        print('Удаление временных файлов и папки.')
-        for file_path in os.listdir(directory):
-            os.remove(directory + file_path)
-        os.rmdir(directory)
-        print('Все временные файлы и папки удалены')
-
-        return 'Удаление временных файлов и папок выполнено'
+        return
 
 
 class YaUploader:
     """Работа с яндекс.диск"""
-    def __init__(self, token, directory, file_list):
+    def __init__(self, token, directory):
         self.token = token
         self.directory = directory
-        self.file_list = file_list
 
-    def upload(self):
-        """Загрузка всех файлов из папки directory на яндекс диск"""
+    def upload(self, kol):
+        """Загрузка файлов из папки directory на яндекс диск"""
+
+        apibaseurl = 'https://cloud-api.yandex.net/v1/disk/resources'
+
+        # Проверка наличия папки на яндекс диске
+        resp = requests.get(apibaseurl, headers={"Authorization": self.token}, params={"path": self.directory})
+        if resp.status_code == 200:
+            # Удаление папки, если она уже существует
+            resp = requests.delete(apibaseurl, headers={"Authorization": self.token}, params={"path": self.directory})
+            time.sleep(2)
+            print('Удалена папка на яндекс диске:', directory)
 
         # Создание папки
         print('Создание папки на яндекс диске.')
-        url = 'https://cloud-api.yandex.net/v1/disk/resources'
-        resp = requests.put(url, headers={"Authorization": self.token}, params={"path": self.directory})
+        resp = requests.put(apibaseurl, headers={"Authorization": self.token}, params={"path": self.directory})
 
         # Сохранение файлов в папку
-        url = 'https://cloud-api.yandex.net/v1/disk/resources/upload'
         headers = {"Authorization": self.token}
-
-        names = []
-        for file in self.file_list:
-            names.append(file['file_name'])
-
+        file_list = []
         for file_path in os.listdir(self.directory):
-            if file_path in names:
-                params = {"path": self.directory + file_path}
-                resp = requests.get(url, headers=headers, params=params)
+            if file_path.endswith(".jpg"):
+                d = {}
+                d['file_name'] = file_path
+                d['size'] = int(os.path.getsize(self.directory + file_path))
+                file_list.append(d)
 
-                with open(self.directory + file_path, 'rb') as f:
-                    print('Загрузка файла:', file_path)
-                    response = requests.post(resp.json()['href'], files={"file": f})
-                    if str(response) == '<Response [201]>':
-                        print('Файл успешно загружен.')
-                    else:
-                        return 'Файл не загружен.'
+        def myfunc(names):
+            return names['size']
+        file_list.sort(reverse=True, key=myfunc)
+        file_list = file_list[:kol]
+
+        for file in file_list:
+            file_path = file['file_name']
+            params = {"path": self.directory + file_path}
+            resp = requests.get(apibaseurl + '/upload', headers=headers, params=params)
+
+            with open(self.directory + file_path, 'rb') as f:
+                print('Загрузка файла:', file_path)
+                response = requests.post(resp.json()['href'], files={"file": f})
+                if response.status_code == 201:
+                    print('Файл успешно загружен.')
+                else:
+                    print('Файл не загружен.')
+
+        with open(directory + 'file_list.json', 'w') as f:
+            json.dump(file_list, f)
 
         print('Загрузка файла json с названиями и размерами файлов')
         params = {"path": self.directory + 'file_list.json'}
-        resp = requests.get(url, headers=headers, params=params)
+        resp = requests.get(apibaseurl + '/upload', headers=headers, params=params)
 
         with open(self.directory + 'file_list.json', 'rb') as f:
             response = requests.post(resp.json()['href'], files={"file": f})
-            if str(response) == '<Response [201]>':
+            if response.status_code == 201:
                 print('Файл успешно загружен.')
             else:
-                return 'Файл не загружен.'
+                print('Файл не загружен.')
 
-        return 'Загрузка выполнена.'
+        print('Загрузка выполнена.')
 
 
-# Ввод данных
-# ID пользователя, у которого треуется выгрузить фотографии
-owner_id = '552934290'
-token_vk = '958eb5d439726565e9333aa30e50e0f937ee432e927f0dbd541c541887d919a7c56f95c04217915c32008'
-# Папка, в которую будут сохраняться файлы
-directory = 'photos_from_vk/'
-# Количество сохраняемых фотографий
-kol = 5
-# Вставьте свой токен для яндекс.диска:
-token_ya = ''
+if __name__ == "__main__":
+    # Ввод данных
+    # ID пользователя, у которого треуется выгрузить фотографии
+    # owner_id = '552934290'
+    token_vk = '958eb5d439726565e9333aa30e50e0f937ee432e927f0dbd541c541887d919a7c56f95c04217915c32008'
+    owner_id = str(input('Введите аккаунт:\n'))
+    # Папка, в которую будут сохраняться файлы
+    directory = 'photos_from_vk/'
+    # Количество сохраняемых фотографий
+    # kol = 5
+    kol = int(input('Введите количество фотографий:\n'))
 
-vk_client = VkUser(token_vk, '5.131', owner_id)
+    token_ya = str(input('Введите яндекс токен:\n'))
 
-print('Создание временной папки на локальном диске.')
-os.mkdir(directory)
+    vk_client = VkUser(token_vk, '5.131', owner_id)
 
-print('Сохранение фотографий во временную папку.')
-file_list = vk_client.get_photos(requests, directory, kol)
+    print('Создание временной папки на локальном диске.')
+    os.mkdir(directory)
 
-try:
-    uploader = YaUploader(token_ya, directory, file_list)
-    result = uploader.upload()
-    print(result)
-finally:
-    vk_client.delete_temporary(directory)
+    vk_client.get_photos(requests, directory)
 
-print('Все необходимые действия выполнены. Резервное копирование фотографий завершено.')
+    uploader = YaUploader(token_ya, directory)
+    try:
+        result = uploader.upload(kol)
+    finally:
+        delete_temporary(directory)
+
+    print('Все необходимые действия выполнены. Резервное копирование фотографий завершено.')

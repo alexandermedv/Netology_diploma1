@@ -13,7 +13,7 @@ def delete_temporary(directory):
     os.rmdir(directory)
     print('Все временные файлы и папки удалены')
 
-    return 'Удаление временных файлов и папок выполнено'
+    return
 
 
 class VkUser:
@@ -59,61 +59,58 @@ class VkUser:
 
 class YaUploader:
     """Работа с яндекс.диск"""
+
     def __init__(self, token, directory):
         self.token = token
         self.directory = directory
+        self.apibaseurl = 'https://cloud-api.yandex.net/v1/disk/resources'
 
-    def upload(self, kol):
-        """Загрузка файлов из папки directory на яндекс диск"""
-
-        apibaseurl = 'https://cloud-api.yandex.net/v1/disk/resources'
-
+    def create_folder(self):
+        """"Проверка наличия папки и создание, если требуется"""
         # Проверка наличия папки на яндекс диске
-        resp = requests.get(apibaseurl, headers={"Authorization": self.token}, params={"path": self.directory})
+        resp = requests.get(self.apibaseurl, headers={"Authorization": self.token}, params={"path": self.directory})
         if resp.status_code == 200:
             # Удаление папки, если она уже существует
-            resp = requests.delete(apibaseurl, headers={"Authorization": self.token}, params={"path": self.directory})
+            resp = requests.delete(self.apibaseurl, headers={"Authorization": self.token}, params={"path": self.directory})
             time.sleep(2)
             print('Удалена папка на яндекс диске:', directory)
 
         # Создание папки
         print('Создание папки на яндекс диске.')
-        resp = requests.put(apibaseurl, headers={"Authorization": self.token}, params={"path": self.directory})
+        resp = requests.put(self.apibaseurl, headers={"Authorization": self.token}, params={"path": self.directory})
 
+    def upload(self, kol):
+        """Загрузка файлов из папки directory на яндекс диск"""
         # Сохранение файлов в папку
         headers = {"Authorization": self.token}
-        file_list = []
+        # file_list = []
         for file_path in os.listdir(self.directory):
             if file_path.endswith(".jpg"):
                 d = {}
                 d['file_name'] = file_path
                 d['size'] = int(os.path.getsize(self.directory + file_path))
-                file_list.append(d)
+                # file_list.append(d)
 
-        def myfunc(names):
-            return names['size']
-        file_list.sort(reverse=True, key=myfunc)
-        file_list = file_list[:kol]
+                def myfunc(file):
+                    return int(os.path.getsize(self.directory + file))
+                if d['file_name'] in sorted(os.listdir(self.directory), key=myfunc, reverse=True)[:kol]:
+                    params = {"path": self.directory + file_path}
+                    resp = requests.get(self.apibaseurl + '/upload', headers=headers, params=params)
 
-        for file in file_list:
-            file_path = file['file_name']
-            params = {"path": self.directory + file_path}
-            resp = requests.get(apibaseurl + '/upload', headers=headers, params=params)
+                    with open(self.directory + file_path, 'rb') as f:
+                        print('Загрузка файла:', file_path)
+                        response = requests.post(resp.json()['href'], files={"file": f})
+                        if response.status_code == 201:
+                            print('Файл успешно загружен.')
+                        else:
+                            print('Файл не загружен.')
 
-            with open(self.directory + file_path, 'rb') as f:
-                print('Загрузка файла:', file_path)
-                response = requests.post(resp.json()['href'], files={"file": f})
-                if response.status_code == 201:
-                    print('Файл успешно загружен.')
-                else:
-                    print('Файл не загружен.')
-
-        with open(directory + 'file_list.json', 'w') as f:
-            json.dump(file_list, f)
+                    with open(directory + 'file_list.json', 'a') as f:
+                        json.dump(d, f)
 
         print('Загрузка файла json с названиями и размерами файлов')
         params = {"path": self.directory + 'file_list.json'}
-        resp = requests.get(apibaseurl + '/upload', headers=headers, params=params)
+        resp = requests.get(self.apibaseurl + '/upload', headers=headers, params=params)
 
         with open(self.directory + 'file_list.json', 'rb') as f:
             response = requests.post(resp.json()['href'], files={"file": f})
@@ -144,11 +141,11 @@ if __name__ == "__main__":
     print('Создание временной папки на локальном диске.')
     os.mkdir(directory)
 
-    vk_client.get_photos(requests, directory)
-
     uploader = YaUploader(token_ya, directory)
     try:
-        result = uploader.upload(kol)
+        vk_client.get_photos(requests, directory)
+        uploader.create_folder()
+        uploader.upload(kol)
     finally:
         delete_temporary(directory)
 
